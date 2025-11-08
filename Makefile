@@ -1,4 +1,4 @@
-SHELL := /bin/zsh
+SHELL := /bin/bash
 
 
 .PHONY: help create-vpc add-subnet delete-vpc list cleanup
