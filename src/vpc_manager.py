@@ -1,15 +1,82 @@
 import logging
 import subprocess
-from typing import List, Dict
+from typing import List, Dict, Any
 import ipaddress
 import json
+from dataclasses import asdict
 
 from models import VPC, Subnet, FirewallRule
 import os
 
 class VPCManager:
     def __init__(self):
-        self.vpcs = {}  # Store VPCs in memory (in production, use persistent storage)
+        self.vpcs = {}  # Store VPCs in memory
+        # Persistent state file (prefer /var/lib but fall back to /tmp)
+        self._state_path = self._determine_state_path()
+        # Load persisted state if available
+        self._load_state()
+
+    def _determine_state_path(self) -> str:
+        """Determine a writable path for persistent state."""
+        primary_dir = '/var/lib/vpcctl'
+        try:
+            os.makedirs(primary_dir, exist_ok=True)
+            test_path = os.path.join(primary_dir, 'state.json')
+            # test write permissions by opening for append
+            open(test_path, 'a').close()
+            return test_path
+        except Exception:
+            # fallback to /tmp
+            return os.path.join('/tmp', 'vpcctl_state.json')
+
+    def _load_state(self) -> None:
+        """Load VPC state from disk into memory."""
+        try:
+            if os.path.exists(self._state_path):
+                with open(self._state_path, 'r') as f:
+                    data = json.load(f)
+                for name, v in data.items():
+                    subnets = []
+                    for s in v.get('subnets', []):
+                        # Recreate FirewallRule objects if present
+                        rules = [FirewallRule(**r) for r in s.get('firewall_rules', [])]
+                        subnet = Subnet(
+                            name=s['name'], cidr=s['cidr'], is_public=s['is_public'],
+                            namespace=s['namespace'], bridge_ip=s['bridge_ip'], firewall_rules=rules
+                        )
+                        subnets.append(subnet)
+                    self.vpcs[name] = VPC(name=v['name'], cidr=v['cidr'], bridge_name=v['bridge_name'], subnets=subnets)
+                logging.info(f"Loaded VPC state from {self._state_path}")
+        except Exception as e:
+            logging.warning(f"Failed to load state from {self._state_path}: {e}")
+
+    def _save_state(self) -> None:
+        """Persist current VPC state to disk."""
+        try:
+            out = {}
+            for name, vpc in self.vpcs.items():
+                # Use asdict for dataclasses but convert FirewallRule objects
+                v = {
+                    'name': vpc.name,
+                    'cidr': vpc.cidr,
+                    'bridge_name': vpc.bridge_name,
+                    'subnets': []
+                }
+                for s in vpc.subnets:
+                    v['subnets'].append({
+                        'name': s.name,
+                        'cidr': s.cidr,
+                        'is_public': s.is_public,
+                        'namespace': s.namespace,
+                        'bridge_ip': s.bridge_ip,
+                        'firewall_rules': [asdict(r) for r in s.firewall_rules]
+                    })
+                out[name] = v
+            with open(self._state_path, 'w') as f:
+                json.dump(out, f, indent=2)
+            logging.info(f"Saved VPC state to {self._state_path}")
+        except Exception as e:
+            logging.warning(f"Failed to save state to {self._state_path}: {e}")
 
     def _run_command(self, command: List[str]) -> None:
         """Run shell command and handle errors"""
@@ -39,6 +106,8 @@ class VPCManager:
 
         # Store VPC information
         self.vpcs[name] = VPC(name=name, cidr=cidr, bridge_name=bridge_name)
+        # Persist state
+        self._save_state()
         logging.info(f"Created VPC {name} with bridge {bridge_name}")
 
     def add_subnet(self, vpc_name: str, subnet_name: str, cidr: str, is_public: bool) -> None:
@@ -106,6 +175,8 @@ class VPCManager:
             bridge_ip=host_addr
         )
         vpc.subnets.append(subnet)
+        # Persist state after adding subnet
+        self._save_state()
 
     def _setup_nat(self, namespace: str, vpc_bridge: str) -> None:
         """Configure NAT for public subnets"""
@@ -160,6 +231,8 @@ class VPCManager:
 
         # Remove from memory
         del self.vpcs[name]
+        # Persist state after deletion
+        self._save_state()
         logging.info(f"Successfully deleted VPC {name} and all its resources")
 
     def peer_vpcs(self, vpc1_name: str, vpc2_name: str) -> None:
@@ -201,6 +274,8 @@ class VPCManager:
         # Add routes on the host so traffic for each VPC CIDR is routed via the peer veth
         self._run_command(['ip', 'route', 'add', vpc2.cidr, 'via', '169.254.%d.2' % octet, 'dev', veth1])
         self._run_command(['ip', 'route', 'add', vpc1.cidr, 'via', '169.254.%d.1' % octet, 'dev', veth2])
+        # Persist state for peering info
+        self._save_state()
 
     def deploy_app(self, vpc_name: str, subnet_cidr: str, port: int) -> None:
         """Deploy a simple Python HTTP server inside the subnet namespace.
@@ -293,6 +368,8 @@ class VPCManager:
                 action=rule['action']
             ) for rule in policy.get('ingress', [])
         ]
+        # Persist firewall rules
+        self._save_state()
 
     def list_vpcs(self) -> List[VPC]:
         """List all VPCs"""
