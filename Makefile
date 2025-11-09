@@ -25,7 +25,7 @@ delete-vpc:
 
 list:
 	@echo "List VPCs"
-	@python3 src/vpcctl.py list
+	@sudo python3 src/vpcctl.py list
 
 cleanup:
 	@echo "Cleanup helper - manually delete VPCs by name using delete-vpc target"

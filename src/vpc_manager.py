@@ -87,6 +87,27 @@ class VPCManager:
             logging.error(f"Command failed: {e.stderr}")
             raise RuntimeError(f"Command failed: {e.stderr}")
 
+    def _bridge_exists(self, bridge_name: str) -> bool:
+        """Return True if a link with the given name exists in the kernel."""
+        try:
+            result = subprocess.run(['ip', 'link', 'show', bridge_name], check=False, capture_output=True, text=True)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _get_default_if(self) -> str:
+        """Detect host default outbound interface."""
+        try:
+            result = subprocess.run(['ip', 'route', 'get', '1.1.1.1'], capture_output=True, text=True, check=True)
+            parts = result.stdout.split()
+            # typical output: '1.1.1.1 via <gw> dev <if> src <ip> ...'
+            if 'dev' in parts:
+                idx = parts.index('dev')
+                return parts[idx + 1]
+        except Exception:
+            pass
+        return 'eth0'
+
     def create_vpc(self, name: str, cidr: str) -> None:
         """Create a new VPC with a bridge interface"""
         if name in self.vpcs:
@@ -100,9 +121,15 @@ class VPCManager:
 
         bridge_name = f"br-{name}"
 
-        # Create Linux bridge
-        self._run_command(['ip', 'link', 'add', bridge_name, 'type', 'bridge'])
-        self._run_command(['ip', 'link', 'set', bridge_name, 'up'])
+        # If a bridge with the same name already exists in the kernel, reuse it (idempotent)
+        if self._bridge_exists(bridge_name):
+            logging.info(f"Bridge {bridge_name} already exists in kernel — reusing")
+            # Ensure it's up
+            self._run_command(['ip', 'link', 'set', bridge_name, 'up'])
+        else:
+            # Create Linux bridge
+            self._run_command(['ip', 'link', 'add', bridge_name, 'type', 'bridge'])
+            self._run_command(['ip', 'link', 'set', bridge_name, 'up'])
 
         # Store VPC information
         self.vpcs[name] = VPC(name=name, cidr=cidr, bridge_name=bridge_name)
@@ -159,8 +186,8 @@ class VPCManager:
 
         # Add default route in namespace via bridge host IP
         if is_public:
-            # For public subnets, enable NAT and default route via bridge
-            self._setup_nat(namespace, vpc.bridge_name)
+            # For public subnets, enable NAT (scoped to this subnet) and default route via bridge
+            self._setup_nat(namespace, vpc.bridge_name, cidr)
             self._run_command(['ip', 'netns', 'exec', namespace, 'ip', 'route', 'add', 'default', 'via', host_ip])
         else:
             # For private subnets, route to other subnets in the VPC via bridge
@@ -178,30 +205,34 @@ class VPCManager:
         # Persist state after adding subnet
         self._save_state()
 
-    def _setup_nat(self, namespace: str, vpc_bridge: str) -> None:
-        """Configure NAT for public subnets"""
+    def _setup_nat(self, namespace: str, vpc_bridge: str, subnet_cidr: str) -> None:
+        """Configure NAT for a public subnet.
+
+        The MASQUERADE rule is scoped to the subnet CIDR and we add forwarding
+        rules between the VPC bridge and the host default interface. These
+        rules will be removed when the VPC is deleted.
+        """
         # Enable IP forwarding on the host so forwarded packets traverse the host
         self._run_command(['sysctl', '-w', 'net.ipv4.ip_forward=1'])
 
-        # Get host's default interface (root namespace)
-        try:
-            result = subprocess.run(['ip', 'route', 'get', '1.1.1.1'], 
-                                 capture_output=True, text=True, check=True)
-            default_if = result.stdout.split()[4]
-        except Exception:
-            default_if = 'eth0'  # Fallback to eth0
+        default_if = self._get_default_if()
 
-        # Setup masquerading for outbound traffic from the subnet CIDR on the host
-        # Use a generic MASQUERADE for traffic leaving via the host's default interface
-        self._run_command([
-            'iptables',
-            '-t', 'nat', '-A', 'POSTROUTING', '-o', default_if,
-            '-j', 'MASQUERADE'
-        ])
+        # Setup masquerading scoped to the public subnet
+        try:
+            self._run_command([
+                'iptables',
+                '-t', 'nat', '-A', 'POSTROUTING', '-s', subnet_cidr, '-o', default_if,
+                '-j', 'MASQUERADE'
+            ])
+        except Exception:
+            logging.warning(f"Failed to add MASQUERADE rule for {subnet_cidr} -> {default_if}")
 
         # Allow forwarding on the host between vpc bridge and external interface
-        self._run_command(['iptables', '-A', 'FORWARD', '-i', vpc_bridge, '-o', default_if, '-j', 'ACCEPT'])
-        self._run_command(['iptables', '-A', 'FORWARD', '-i', default_if, '-o', vpc_bridge, '-j', 'ACCEPT'])
+        try:
+            self._run_command(['iptables', '-A', 'FORWARD', '-i', vpc_bridge, '-o', default_if, '-j', 'ACCEPT'])
+            self._run_command(['iptables', '-A', 'FORWARD', '-i', default_if, '-o', vpc_bridge, '-j', 'ACCEPT'])
+        except Exception:
+            logging.warning(f"Failed to add FORWARD rules between {vpc_bridge} and {default_if}")
 
     def delete_vpc(self, name: str) -> None:
         """Delete a VPC and all its resources"""
@@ -209,6 +240,13 @@ class VPCManager:
             raise ValueError(f"VPC {name} does not exist")
 
         vpc = self.vpcs[name]
+
+        # Attempt to remove any host-level NAT/forwarding rules associated with
+        # this VPC (for public subnets). Use best-effort deletion.
+        try:
+            self._cleanup_nat_for_vpc(vpc)
+        except Exception as e:
+            logging.warning(f"Failed to cleanup host-level NAT rules: {e}")
 
         # Delete all subnets
         for subnet in vpc.subnets:
@@ -276,6 +314,34 @@ class VPCManager:
         self._run_command(['ip', 'route', 'add', vpc1.cidr, 'via', '169.254.%d.1' % octet, 'dev', veth2])
         # Persist state for peering info
         self._save_state()
+
+    def _cleanup_nat_for_vpc(self, vpc: VPC) -> None:
+        """Remove host-level NAT and FORWARD rules that were added for the VPC's public subnets.
+
+        This is best-effort: iptables -D may fail if rules changed externally.
+        """
+        default_if = self._get_default_if()
+        for subnet in vpc.subnets:
+            if not subnet.is_public:
+                continue
+            cidr = subnet.cidr
+            # Delete MASQUERADE for this subnet
+            try:
+                self._run_command([
+                    'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s', cidr, '-o', default_if, '-j', 'MASQUERADE'
+                ])
+            except Exception:
+                logging.debug(f"MASQUERADE rule for {cidr} may not exist or already removed")
+
+        # Delete FORWARD rules between this vpc bridge and default interface
+        try:
+            self._run_command(['iptables', '-D', 'FORWARD', '-i', vpc.bridge_name, '-o', default_if, '-j', 'ACCEPT'])
+        except Exception:
+            logging.debug(f"FORWARD rule ({vpc.bridge_name} -> {default_if}) may not exist")
+        try:
+            self._run_command(['iptables', '-D', 'FORWARD', '-i', default_if, '-o', vpc.bridge_name, '-j', 'ACCEPT'])
+        except Exception:
+            logging.debug(f"FORWARD rule ({default_if} -> {vpc.bridge_name}) may not exist")
 
     def deploy_app(self, vpc_name: str, subnet_cidr: str, port: int) -> None:
         """Deploy a simple Python HTTP server inside the subnet namespace.
