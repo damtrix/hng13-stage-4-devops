@@ -170,8 +170,16 @@ test-part1:
 	@make deploy-app VPC=testvpc1 SUBNET=10.0.2.0/24 PORT=8081
 	@sleep 2
 	@echo "Verifying servers are running..."
-	@sudo ip netns exec testvpc1-public1 curl -s --connect-timeout 1 http://127.0.0.1:8080 > /dev/null && echo "✅ Public server running" || echo "⚠️  Public server check"
-	@sudo ip netns exec testvpc1-private1 curl -s --connect-timeout 1 http://127.0.0.1:8081 > /dev/null && echo "✅ Private server running" || echo "⚠️  Private server check"
+	@echo "Checking public server logs..."
+	@sudo cat /tmp/vpcctl-testvpc1-public1-8080.log 2>/dev/null || echo "No log file yet"
+	@echo "Checking private server logs..."
+	@sudo cat /tmp/vpcctl-testvpc1-private1-8081.log 2>/dev/null || echo "No log file yet"
+	@echo "Checking if processes are running..."
+	@sudo ip netns exec testvpc1-public1 ps aux | grep -v grep | grep "web_server.py 8080" && echo "✅ Public server process found" || echo "⚠️  Public server process not found"
+	@sudo ip netns exec testvpc1-private1 ps aux | grep -v grep | grep "web_server.py 8081" && echo "✅ Private server process found" || echo "⚠️  Private server process not found"
+	@echo "Testing localhost connectivity..."
+	@sudo ip netns exec testvpc1-public1 curl -s --connect-timeout 2 http://127.0.0.1:8080 > /dev/null && echo "✅ Public server responding" || echo "⚠️  Public server not responding"
+	@sudo ip netns exec testvpc1-private1 curl -s --connect-timeout 2 http://127.0.0.1:8081 > /dev/null && echo "✅ Private server responding" || echo "⚠️  Private server not responding"
 	@echo ""
 	@echo "Testing inter-subnet communication..."
 	@echo "Checking routes in private namespace..."

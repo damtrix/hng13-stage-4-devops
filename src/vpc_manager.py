@@ -637,10 +637,45 @@ class VPCManager:
         logfile = f"/tmp/vpcctl-{namespace}-{port}.log"
 
         # Start the server in background inside the namespace
-        cmd = (
-            f"ip netns exec {namespace} bash -lc 'nohup python3 {websrv} {port} >{logfile} 2>&1 & echo $! > {pidfile}'"
-        )
-        self._run_command(['bash', '-c', cmd])
+        # Use setsid to detach from terminal and ensure it stays running
+        start_script = f'''#!/bin/sh
+cd /tmp
+setsid python3 {websrv} {port} >{logfile} 2>&1 < /dev/null &
+echo $! > {pidfile}
+'''
+        script_file = f"/tmp/start-server-{namespace}-{port}.sh"
+        with open(script_file, 'w') as f:
+            f.write(start_script)
+        os.chmod(script_file, 0o755)
+        
+        start_cmd = ['ip', 'netns', 'exec', namespace, script_file]
+        self._run_command(start_cmd)
+        
+        # Clean up script
+        try:
+            os.remove(script_file)
+        except:
+            pass
+        
+        # Wait a moment and verify the server started
+        import time
+        time.sleep(1)
+        if os.path.exists(pidfile):
+            with open(pidfile, 'r') as f:
+                pid = f.read().strip()
+            if pid:
+                # Check if process is actually running
+                result = subprocess.run(
+                    ['ip', 'netns', 'exec', namespace, 'ps', '-p', pid],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    logging.warning(f"Server may not have started (pid {pid} not found). Check {logfile}")
+                else:
+                    logging.info(f"Server started successfully (pid {pid})")
+        else:
+            logging.warning(f"PID file {pidfile} was not created. Check {logfile}")
+            
         logging.info(f"Deployed web server in namespace {namespace} on port {port} (pidfile: {pidfile})")
 
     def stop_app(self, vpc_name: str, subnet_cidr: str, port: int) -> None:
