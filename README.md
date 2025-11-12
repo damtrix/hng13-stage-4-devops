@@ -114,7 +114,7 @@ After deploying, you can curl the server from another namespace or from the host
 sudo ip netns exec myvpc-private1 curl http://10.0.1.2:8000
 
 # From host (public subnet may be reachable depending on NAT/bridge setup)
-curl http://10.0.1.2:8000
+curl http://10.0.1.2:80
 ```
 
 ## Testing Connectivity
