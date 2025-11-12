@@ -8,8 +8,8 @@ help:
 	@echo "Targets: create-vpc, add-subnet, delete-vpc, list, cleanup"
 
 create-vpc:
-	@echo "Create a VPC: make create-vpc NAME=myvpc CIDR=10.0.0.0/16"
-	@sudo python3 src/vpcctl.py create-vpc --name $(NAME) --cidr $(CIDR)
+	@echo "Create a VPC: make create-vpc NAME=myvpc CIDR=10.0.0.0/16 [INTERFACE=eth0]"
+	@sudo python3 src/vpcctl.py create-vpc --name $(NAME) --cidr $(CIDR) $(if $(INTERFACE),--internet-interface $(INTERFACE),)
 
 add-subnet:
 	@echo "Add subnet: make add-subnet VPC=myvpc NAME=public1 CIDR=10.0.1.0/24 PUBLIC=1"

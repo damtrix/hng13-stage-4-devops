@@ -18,6 +18,7 @@ def parse_args():
     create_vpc = subparsers.add_parser('create-vpc', help='Create a new VPC')
     create_vpc.add_argument('--name', required=True, help='VPC name')
     create_vpc.add_argument('--cidr', required=True, help='CIDR block for VPC')
+    create_vpc.add_argument('--internet-interface', help='Host interface used for internet/NAT traffic')
 
     # Add subnet command
     add_subnet = subparsers.add_parser('add-subnet', help='Add a subnet to VPC')
@@ -34,6 +35,12 @@ def parse_args():
     peer_vpc = subparsers.add_parser('peer-vpc', help='Create VPC peering')
     peer_vpc.add_argument('--vpc1', required=True, help='First VPC name')
     peer_vpc.add_argument('--vpc2', required=True, help='Second VPC name')
+    peer_vpc.add_argument(
+        '--allow-cidr',
+        action='append',
+        default=[],
+        help='CIDR to allow across the peering (can be repeated)'
+    )
 
     # Add firewall rule command
     add_rule = subparsers.add_parser('add-rule', help='Add firewall rule')
@@ -66,7 +73,7 @@ def main():
 
     try:
         if args.command == 'create-vpc':
-            vpc_manager.create_vpc(args.name, args.cidr)
+            vpc_manager.create_vpc(args.name, args.cidr, args.internet_interface)
             logging.info(f"Created VPC: {args.name} with CIDR: {args.cidr}")
 
         elif args.command == 'add-subnet':
@@ -79,8 +86,11 @@ def main():
             logging.info(f"Deleted VPC: {args.name}")
 
         elif args.command == 'peer-vpc':
-            vpc_manager.peer_vpcs(args.vpc1, args.vpc2)
-            logging.info(f"Created peering between VPCs: {args.vpc1} and {args.vpc2}")
+            vpc_manager.peer_vpcs(args.vpc1, args.vpc2, args.allow_cidr)
+            logging.info(
+                f"Created peering between VPCs: {args.vpc1} and {args.vpc2} "
+                f"with allowed CIDRs: {args.allow_cidr or 'ALL'}"
+            )
 
         elif args.command == 'add-rule':
             with open(args.policy) as f:

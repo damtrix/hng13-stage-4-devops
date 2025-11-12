@@ -46,7 +46,7 @@ class TestVPCManager(unittest.TestCase):
         self.assertEqual(vpc.cidr, cidr)
         
         # Verify bridge creation
-        bridge_exists = os.system(f"ip link show {vpc_name}-bridge > /dev/null 2>&1") == 0
+        bridge_exists = os.system(f"ip link show {vpc.bridge_name} > /dev/null 2>&1") == 0
         self.assertTrue(bridge_exists, "Bridge not created")
 
     def test_add_public_subnet(self):
@@ -57,6 +57,7 @@ class TestVPCManager(unittest.TestCase):
         
         # Create VPC and add public subnet
         vpc = self.manager.create_vpc(vpc_name, vpc_cidr)
+        bridge_name = vpc.bridge_name
         subnet = self.manager.add_subnet(vpc_name, "public1", subnet_cidr, is_public=True)
         
         # Verify subnet creation
@@ -140,7 +141,7 @@ class TestVPCManager(unittest.TestCase):
         self.manager.delete_vpc(vpc_name)
         
         # Verify cleanup
-        bridge_exists = os.system(f"ip link show {vpc_name}-bridge > /dev/null 2>&1") == 0
+        bridge_exists = os.system(f"ip link show {bridge_name} > /dev/null 2>&1") == 0
         self.assertFalse(bridge_exists, "Bridge not deleted")
         
         ns_exists = os.system(f"ip netns show | grep {vpc_name}-public1 > /dev/null 2>&1") == 0

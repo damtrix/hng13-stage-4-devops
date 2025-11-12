@@ -35,7 +35,7 @@ A tool for creating and managing Virtual Private Cloud (VPC) environments on Lin
 ### Creating a VPC
 
 ```bash
-sudo vpcctl create-vpc --name myvpc --cidr 10.0.0.0/16
+sudo vpcctl create-vpc --name myvpc --cidr 10.0.0.0/16 --internet-interface eth0
 ```
 
 ### Adding Subnets
@@ -51,7 +51,9 @@ sudo vpcctl add-subnet --vpc myvpc --name private1 --cidr 10.0.2.0/24
 ### VPC Peering
 
 ```bash
-sudo vpcctl peer-vpc --vpc1 myvpc1 --vpc2 myvpc2
+sudo vpcctl peer-vpc --vpc1 myvpc1 --vpc2 myvpc2 \
+  --allow-cidr 10.0.1.0/24 \
+  --allow-cidr 172.16.1.0/24
 ```
 
 ### Managing Security Groups
