@@ -51,6 +51,12 @@ sudo vpcctl add-subnet --vpc myvpc --name private1 --cidr 10.0.2.0/24
 ### VPC Peering
 
 ```bash
+Creating myvpc1 and myvpc2
+sudo vpcctl create-vpc --name myvpc1 --cidr 10.0.0.0/16 --internet-interface eth0
+sudo vpcctl create-vpc --name myvpc2 --cidr 172.16.0.0/16 --internet-interface eth0
+```
+
+```bash
 sudo vpcctl peer-vpc --vpc1 myvpc1 --vpc2 myvpc2 \
   --allow-cidr 10.0.1.0/24 \
   --allow-cidr 172.16.1.0/24
@@ -95,6 +101,7 @@ You can deploy a simple Python HTTP server inside a subnet namespace using the C
 ```bash
 # Deploy server into public subnet on port 8000
 sudo vpcctl deploy-app --vpc myvpc --subnet 10.0.1.0/24 --port 8000
+sudo ip netns exec myvpc-public1 bash -lc 'nohup python3 src/web_server.py 80 >/tmp/public1-80.log 2>&1 &'
 
 # Stop the server
 sudo vpcctl stop-app --vpc myvpc --subnet 10.0.1.0/24 --port 8000
