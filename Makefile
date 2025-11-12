@@ -163,13 +163,22 @@ test-part1:
 	@echo ""
 	@echo "Deploying test servers..."
 	@make deploy-app VPC=testvpc1 SUBNET=10.0.1.0/24 PORT=8080
-	@sleep 1
+	@sleep 2
 	@make deploy-app VPC=testvpc1 SUBNET=10.0.2.0/24 PORT=8081
-	@sleep 1
+	@sleep 2
+	@echo "Verifying servers are running..."
+	@sudo ip netns exec testvpc1-public1 curl -s --connect-timeout 1 http://127.0.0.1:8080 > /dev/null && echo "✅ Public server running" || echo "⚠️  Public server check"
+	@sudo ip netns exec testvpc1-private1 curl -s --connect-timeout 1 http://127.0.0.1:8081 > /dev/null && echo "✅ Private server running" || echo "⚠️  Private server check"
 	@echo ""
 	@echo "Testing inter-subnet communication..."
+	@echo "Checking routes in private namespace..."
+	@sudo ip netns exec testvpc1-private1 ip route
+	@echo "Checking routes in public namespace..."
+	@sudo ip netns exec testvpc1-public1 ip route
+	@echo "Testing connectivity..."
 	@sudo ip netns exec testvpc1-public1 curl -s --connect-timeout 2 http://10.0.2.2:8081 > /dev/null && echo "✅ Public -> Private: SUCCESS" || (echo "❌ Public -> Private: FAILED" && exit 1)
-	@sudo ip netns exec testvpc1-private1 curl -s --connect-timeout 2 http://10.0.1.2:8080 > /dev/null && echo "✅ Private -> Public: SUCCESS" || (echo "❌ Private -> Public: FAILED" && exit 1)
+	@sudo ip netns exec testvpc1-private1 ping -c 1 -W 2 10.0.1.2 > /dev/null 2>&1 && echo "✅ Private can ping public IP" || echo "⚠️  Private cannot ping public IP"
+	@sudo ip netns exec testvpc1-private1 curl -s --connect-timeout 2 http://10.0.1.2:8080 > /dev/null && echo "✅ Private -> Public: SUCCESS" || (echo "❌ Private -> Public: FAILED - checking firewall..." && sudo ip netns exec testvpc1-public1 iptables -L INPUT -n && exit 1)
 	@echo ""
 	@echo "✅ PART 1 COMPLETE: VPC creation and subnet communication verified"
 

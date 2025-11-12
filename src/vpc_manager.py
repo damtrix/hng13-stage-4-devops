@@ -689,6 +689,11 @@ class VPCManager:
             'ip', 'netns', 'exec', subnet.namespace, 'iptables', '-A', 'INPUT',
             '-i', 'lo', '-j', 'ACCEPT'
         ])
+        # Allow traffic from within the VPC CIDR (for inter-subnet communication)
+        self._run_command([
+            'ip', 'netns', 'exec', subnet.namespace, 'iptables', '-A', 'INPUT',
+            '-s', vpc.cidr, '-j', 'ACCEPT'
+        ])
 
         # Add new rules
         for rule in policy.get('ingress', []):
