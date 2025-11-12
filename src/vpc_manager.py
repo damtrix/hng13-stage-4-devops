@@ -262,12 +262,22 @@ class VPCManager:
 
         if not self._namespace_exists(namespace):
             self._run_command(['ip', 'netns', 'add', namespace])
+        else:
+            # Namespace exists - check if it has our veth and clean it up if needed
+            result = subprocess.run(
+                ['ip', 'netns', 'exec', namespace, 'ip', 'link', 'show', ns_veth],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                # Veth exists in namespace - delete it (this will also remove host peer)
+                subprocess.run(
+                    ['ip', 'netns', 'exec', namespace, 'ip', 'link', 'delete', ns_veth],
+                    capture_output=True, text=True
+                )
 
-        # Clean up stray link names if present
+        # Clean up stray host_veth if present (only if not already cleaned above)
         if self._link_exists(host_veth):
             self._run_command(['ip', 'link', 'delete', host_veth])
-        if self._link_exists(ns_veth):
-            self._run_command(['ip', 'link', 'delete', ns_veth])
 
         # Create veth pair
         self._run_command(['ip', 'link', 'add', host_veth, 'type', 'veth', 'peer', 'name', ns_veth])

@@ -146,6 +146,9 @@ test-part1:
 	@echo "=========================================="
 	@echo "PART 1: VPC Creation & Subnet Communication"
 	@echo "=========================================="
+	@echo "Cleaning up any existing test VPCs..."
+	@-make delete-vpc NAME=testvpc1 2>/dev/null || true
+	@-make delete-vpc NAME=testvpc2 2>/dev/null || true
 	@echo "Creating VPC 'testvpc1' with CIDR 10.0.0.0/16..."
 	@make create-vpc NAME=testvpc1 CIDR=10.0.0.0/16 INTERFACE=$(DEFAULT_IF)
 	@echo ""
